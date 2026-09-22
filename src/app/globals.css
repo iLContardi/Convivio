@@ -1,26 +1,218 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ============================================================
+   Convivio
+   Una scelta sola tiene insieme tutto: l'app è scura sempre.
+   Non è una preferenza di sistema da assecondare: è il posto in
+   cui si sta seduti a parlare, e la stanza intorno si abbassa
+   perché il parlato resti l'unica cosa illuminata.
+   ============================================================ */
+
+@theme {
+  /* Superfici. Nero caldo, non blu: convive con il mattone di
+     Claude senza litigarci. */
+  --color-page: #100f0d;
+  --color-panel: #191714;
+  --color-raised: #23201c;
+  --color-line: #2c2823;
+  --color-line-strong: #3d3831;
+
+  /* Testo */
+  --color-ink: #ede8dd;
+  --color-ink-dim: #a49d90;
+  /* Il grado più tenue è tarato, non scelto a occhio: sul fondo pagina fa
+     4,57:1, appena sopra la soglia AA. Sotto questo valore i metadati in
+     mono a 11px smettono di essere leggibili e diventano decorazione. */
+  --color-ink-faint: #827b6e;
+
+  /* Tre accenti, tre significati. L'ottone è l'attenzione (fuoco,
+     stato attivo, modifiche non salvate), il rosso è la diretta e
+     l'errore, il verde è ciò che ha funzionato — la cache in testa. */
+  --color-brass: #e3b23c;
+  --color-live: #e2564a;
+  --color-good: #5dcaa5;
+
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-serif: var(--font-newsreader), Georgia, "Times New Roman", serif;
+
+  --animate-rise: rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-live: live 1.8s ease-in-out infinite;
+  --animate-caret: caret 1.1s step-end infinite;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@keyframes live {
+  50% {
+    opacity: 0.3;
+  }
+}
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+/* Le barrette accanto a chi sta parlando. Sfasate fra loro, così
+   sembrano un livello audio e non tre cose che pulsano insieme. */
+@keyframes bars {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
   }
 }
 
+:root {
+  color-scheme: dark;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-brass) 30%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-brass) 70%, transparent);
+  outline-offset: 2px;
+}
+
+/* Barre di scorrimento: presenti quando servono, mai protagoniste. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+/* ------------------------------------------------------------
+   Identità degli ospiti
+   Il colore arriva dal database come `--guest`. Quei tre valori sul
+   fondo pagina stanno fra 4,9:1 e 6:1 — leggibili, ma appena sopra la
+   soglia: alle dimensioni a cui li usiamo davvero (nomi in mono a
+   11px, maiuscoletto) restano opachi. Schiarirli porta i tre fra 7,4:1
+   e 8,4:1 senza toccare il dato, che resta quello scelto dall'utente e
+   viene usato tale e quale dove è pieno — barre, pallini, sfondi.
+   ------------------------------------------------------------ */
+[data-guest] {
+  --guest-ink: color-mix(in oklab, var(--guest) 70%, #f4efe4);
+  --guest-wash: color-mix(in oklab, var(--guest) 14%, transparent);
+}
+.guest-ink {
+  color: var(--guest-ink);
+}
+.guest-rule {
+  border-color: var(--guest);
+}
+.guest-wash {
+  background: var(--guest-wash);
+}
+
+/* ------------------------------------------------------------
+   Il parlato
+   Serif, largo, interlinea da lettura: un turno è duecento parole
+   e una conversazione ne ha trenta. È l'unico posto dell'app dove la
+   comodità di lettura viene prima della densità.
+   ------------------------------------------------------------ */
+.md {
+  font-family: var(--font-serif);
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--color-ink);
+}
+.md > * + * {
+  margin-top: 0.9em;
+}
+.md strong {
+  font-weight: 600;
+  color: #fbf7ee;
+}
+.md em {
+  font-style: italic;
+}
+.md ul,
+.md ol {
+  padding-left: 1.4em;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md li + li {
+  margin-top: 0.3em;
+}
+.md li::marker {
+  color: var(--color-ink-faint);
+}
+.md blockquote {
+  border-left: 2px solid var(--color-line-strong);
+  padding-left: 1em;
+  color: var(--color-ink-dim);
+  font-style: italic;
+}
+.md a {
+  color: var(--color-brass);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Codice e formule tornano al sans/mono: sono citazioni tecniche
+   dentro il parlato, non parlato a loro volta. */
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  padding: 0.1em 0.35em;
+  border-radius: 0.3em;
+}
+.md pre {
+  overflow-x: auto;
+  padding: 0.9em 1em;
+  border-radius: 0.6em;
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  font-size: 0.9em;
+}
+.md pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+.md table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 0.9em;
+}
+.md th,
+.md td {
+  border: 1px solid var(--color-line);
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.md th {
+  background: var(--color-panel);
+  font-weight: 500;
+}
+
+/* Le formule isolate possono eccedere in larghezza: scorrono da sole
+   invece di allargare la colonna. */
+.md .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.3em 0;
 }
