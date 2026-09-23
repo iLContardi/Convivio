@@ -45,7 +45,8 @@ CREATE TABLE guests (
   created_at    TEXT NOT NULL
 );
 
--- Le regole della conversazione, versionate
+-- Le regole della conversazione. Le righe sono IMMUTABILI: ogni salvataggio
+-- inserisce una versione nuova, non riscrive quella esistente.
 CREATE TABLE formats (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
@@ -61,7 +62,7 @@ CREATE TABLE episodes (
   title       TEXT,                     -- generato a fine registrazione
   topic       TEXT NOT NULL,
   brief       TEXT,                     -- le riflessioni di base portate dall'host
-  format_id   TEXT NOT NULL REFERENCES formats(id),
+  format_id   TEXT NOT NULL REFERENCES formats(id),  -- fissato alla creazione, mai più cambiato
   host_name   TEXT NOT NULL DEFAULT 'Moderatore',
   phase       TEXT NOT NULL DEFAULT 'apertura',  -- apertura | dibattito | chiusura
   status      TEXT NOT NULL DEFAULT 'draft',     -- draft | live | paused | ended
@@ -111,6 +112,8 @@ Note di progetto:
 - `superseded_by` invece di cancellare: un rigenera non distrugge la presa precedente. Costa una colonna, salva le conversazioni.
 - `discarded_at` separata da `superseded_by`, e non riusata: la seconda punta al turno *sostituto*, e un rewind un sostituto non ce l'ha. Auto-referenziare il turno confonderebbe il percorso del rigenera.
 - `turns.phase` esiste per il rewind: il testo di una direttiva è editabile, quindi non è un identificatore. Senza questa colonna, dopo aver riavvolto non si può sapere a che fase è tornata la conversazione.
+- **`formats` è immutabile**, ed è ciò che rende `episodes.format_id` una garanzia invece di un riferimento a un bersaglio mobile. Finché le righe si potevano riscrivere, modificare le regole cambiava retroattivamente il prompt di *ogni* conversazione passata: la trascrizione restava, ma diventava impossibile sapere che cosa l'avesse prodotta. Ora una conversazione usa fino alla fine la versione con cui è nata.
+- Quale versione ricevono le conversazioni nuove sta in `settings.currentFormatId`, un puntatore esplicito e non «la riga più recente»: così si può tornare a una versione precedente senza cancellare quelle in mezzo.
 - `cost_micros` intero: mai float sui soldi.
 - `joined_at_turn` / `left_at_turn` esistono già in v1 anche se i partecipanti variabili arrivano dopo — evitano una migrazione.
 - `provider UNIQUE`: l'ospite *è* la famiglia. Cambiare versione del modello non crea un nuovo ospite, e il nome in trascrizione resta stabile fra le conversazioni.
@@ -295,7 +298,11 @@ L'applicazione è scura sempre: non è una preferenza di sistema da assecondare,
 
 **Ospiti** — tre schede fisse, una per famiglia. Modello scelto da un menu popolato leggendo l'API, chiave come nome della env var, persona, parametri. I controlli mostrati dipendono dalle capability di *quel* modello (§2bis): su Claude Opus 5 compare `effort` e la temperatura non esiste. Pulsante "prova" che manda un ping e conferma che la configurazione risponde.
 
-**Regole** — editor del prompt condiviso con i `{{segnaposto}}` evidenziati mentre si scrive, i testi delle tre direttive di fase, e l'anteprima del prompt composto per un ospite scelto. Versionato.
+**Regole** — editor del prompt condiviso con i `{{segnaposto}}` evidenziati mentre si scrive, i testi delle tre direttive di fase, e l'anteprima del prompt composto per un ospite scelto.
+
+Due viste sulle stesse regole, distinte dall'indirizzo. `/config` modifica la versione **corrente**, quella che riceveranno le conversazioni nuove: salvare crea la versione successiva e sposta il puntatore, con una conferma che dice quale numero stai creando e che le conversazioni già avviate non si muovono. `/config?conversazione=<id>` mostra invece la versione con cui è stata condotta **quella** conversazione, in sola lettura — modificarla lì riscriverebbe il prompt sotto una conversazione già avvenuta, e la trascrizione smetterebbe di corrispondere a ciò che l'ha prodotta. Da quella vista si può però adottare la versione come corrente, che è il modo non distruttivo di riportare in uso regole vecchie.
+
+Nota: il nome dello spazio e quello di chi modera sono impostazioni globali, non versionate, e per questo non compaiono nella vista storica. Anche la configurazione degli ospiti — modello, persona, parametri — è globale: l'unica traccia storica del modello che ha risposto è `turns.model`, turno per turno.
 
 **Nuova conversazione** — tema e brief, e chi siede al tavolo: le schede si numerano nell'ordine in cui le tocchi, perché l'ordine di selezione *è* l'ordine del giro.
 
@@ -317,7 +324,7 @@ src/
       episodes/route.ts               # elenco, creazione
       episodes/[id]/route.ts          # stato, fase, intervento, riavvolgimento
       episodes/[id]/turn/route.ts     # genera il prossimo turno, streaming SSE
-      format/route.ts
+      format/route.ts                 # versione corrente, crea versioni, adotta
       format/preview/route.ts         # il prompt composto, su un esempio
       guests/route.ts
       guests/test/route.ts            # il ping di "prova"

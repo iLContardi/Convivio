@@ -2,7 +2,7 @@ import "server-only";
 
 import { nanoid } from "nanoid";
 import { getDb, nowIso } from "./index";
-import { getSettings } from "./settings";
+import { getRawSetting, getSettings, setRawSetting } from "./settings";
 import {
   DEFAULT_FORMAT,
   PHASE_INSTRUCTIONS,
@@ -56,15 +56,43 @@ export interface FormatRecord {
   id: string;
   name: string;
   body: string;
+  version: number;
   phases: Record<Phase, string>;
 }
 
-export function ensureDefaultFormat(): string {
+/** Chiave in `settings` che indica quale versione ricevono le conversazioni nuove. */
+const CURRENT_FORMAT_KEY = "currentFormatId";
+
+/**
+ * L'id della versione corrente delle regole.
+ *
+ * Il puntatore è esplicito invece di «la riga più recente» per due motivi: si
+ * può tornare a una versione precedente senza cancellare quelle in mezzo, e
+ * soprattutto «la più vecchia» — come faceva la vecchia implementazione —
+ * resterebbe incollata alla v1 per sempre una volta introdotte le versioni.
+ */
+export function currentFormatId(): string {
   const db = getDb();
-  const existing = db
-    .prepare("SELECT id FROM formats ORDER BY created_at ASC LIMIT 1")
+
+  const pinned = getRawSetting(CURRENT_FORMAT_KEY);
+  if (pinned) {
+    const exists = db
+      .prepare("SELECT id FROM formats WHERE id = ?")
+      .get(pinned) as { id: string } | undefined;
+    if (exists) return exists.id;
+  }
+
+  // Nessun puntatore: o è la prima esecuzione, o è un database creato prima
+  // che le versioni esistessero. In entrambi i casi la riga più recente è
+  // quella giusta da adottare.
+  const latest = db
+    .prepare("SELECT id FROM formats ORDER BY version DESC, created_at DESC LIMIT 1")
     .get() as { id: string } | undefined;
-  if (existing) return existing.id;
+
+  if (latest) {
+    setRawSetting(CURRENT_FORMAT_KEY, latest.id);
+    return latest.id;
+  }
 
   const id = nanoid(12);
   db.prepare(
@@ -76,16 +104,32 @@ export function ensureDefaultFormat(): string {
     JSON.stringify(PHASE_INSTRUCTIONS),
     nowIso(),
   );
+  setRawSetting(CURRENT_FORMAT_KEY, id);
   return id;
 }
 
-/** Senza id restituisce il format corrente (per ora ce n'è uno solo). */
+/** Sposta il puntatore su una versione che esiste già. Non ne crea di nuove. */
+export function setCurrentFormat(formatId: string): void {
+  const exists = getDb()
+    .prepare("SELECT id FROM formats WHERE id = ?")
+    .get(formatId);
+  if (!exists) throw new Error("Versione delle regole inesistente");
+  setRawSetting(CURRENT_FORMAT_KEY, formatId);
+}
+
+/** Senza id restituisce la versione corrente delle regole. */
 export function getFormat(formatId?: string): FormatRecord {
-  const id = formatId ?? ensureDefaultFormat();
+  const id = formatId ?? currentFormatId();
   const row = getDb()
-    .prepare("SELECT id, name, body, phases FROM formats WHERE id = ?")
+    .prepare("SELECT id, name, body, version, phases FROM formats WHERE id = ?")
     .get(id) as
-    | { id: string; name: string; body: string; phases: string }
+    | {
+        id: string;
+        name: string;
+        body: string;
+        version: number;
+        phases: string;
+      }
     | undefined;
 
   if (!row) {
@@ -93,6 +137,7 @@ export function getFormat(formatId?: string): FormatRecord {
       id,
       name: "Regole standard",
       body: DEFAULT_FORMAT,
+      version: 1,
       phases: PHASE_INSTRUCTIONS,
     };
   }
@@ -107,23 +152,44 @@ export function getFormat(formatId?: string): FormatRecord {
     id: row.id,
     name: row.name,
     body: row.body,
+    version: row.version,
     phases: { ...PHASE_INSTRUCTIONS, ...stripEmpty(stored) },
   };
 }
 
-export function updateFormat(
-  formatId: string,
+/**
+ * Crea una versione nuova delle regole a partire da una esistente.
+ *
+ * Le righe di `formats` sono immutabili: non si aggiorna mai il corpo di una
+ * versione già scritta. È l'unica cosa che rende `episodes.format_id` una
+ * garanzia invece di un riferimento a un bersaglio mobile — prima, modificare
+ * le regole riscriveva retroattivamente il prompt di ogni conversazione
+ * passata, senza che se ne accorgesse nessuno.
+ */
+export function createFormatVersion(
+  fromFormatId: string,
   patch: { body?: string; phases?: Partial<Record<Phase, string>> },
 ): FormatRecord {
-  const current = getFormat(formatId);
-  getDb()
-    .prepare("UPDATE formats SET body = ?, phases = ? WHERE id = ?")
-    .run(
-      patch.body ?? current.body,
-      JSON.stringify({ ...current.phases, ...stripEmpty(patch.phases ?? {}) }),
-      formatId,
-    );
-  return getFormat(formatId);
+  const db = getDb();
+  const base = getFormat(fromFormatId);
+
+  const id = nanoid(12);
+  const next = db
+    .prepare("SELECT COALESCE(MAX(version), 0) + 1 AS n FROM formats")
+    .get() as { n: number };
+
+  db.prepare(
+    "INSERT INTO formats (id, name, body, version, phases, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(
+    id,
+    base.name,
+    patch.body ?? base.body,
+    next.n,
+    JSON.stringify({ ...base.phases, ...stripEmpty(patch.phases ?? {}) }),
+    nowIso(),
+  );
+
+  return getFormat(id);
 }
 
 function stripEmpty(
@@ -149,7 +215,7 @@ export function createEpisode(input: {
 }): Episode {
   const db = getDb();
   const id = nanoid(12);
-  const formatId = ensureDefaultFormat();
+  const formatId = currentFormatId();
 
   db.transaction(() => {
     db.prepare(

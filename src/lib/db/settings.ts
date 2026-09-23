@@ -19,6 +19,27 @@ const DEFAULTS: Settings = {
   hostName: "Moderatore",
 };
 
+/**
+ * Accesso grezzo alla tabella, per le chiavi che non sono impostazioni
+ * dell'utente e non vanno esposte nell'editor — oggi solo il puntatore alla
+ * versione corrente delle regole.
+ */
+export function getRawSetting(key: string): string | null {
+  const row = getDb()
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setRawSetting(key: string, value: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .run(key, value);
+}
+
 export function getSettings(): Settings {
   const rows = getDb()
     .prepare("SELECT key, value FROM settings")

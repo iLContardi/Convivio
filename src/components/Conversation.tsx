@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Markdown } from "@/components/Markdown";
 
 const MAX_AUTO_TURNS = 5;
@@ -45,6 +46,7 @@ export interface ConversationData {
   guests: Guest[];
   participants: Participant[];
   next: Participant | null;
+  formatVersion: number;
 }
 
 const btnPrimary =
@@ -649,6 +651,20 @@ export function Conversation({ initial }: { initial: ConversationData }) {
               </button>
             ))}
           </div>
+        </Panel>
+
+        <Panel title="Regole">
+          {/* Fissate alla creazione: questa conversazione le userà fino alla
+              fine anche se nel frattempo ne esce una versione nuova. */}
+          <Link
+            href={`/config?conversazione=${id}`}
+            className="text-ink-dim hover:text-ink flex items-center gap-2 text-[0.8125rem] transition-colors"
+          >
+            <span className="font-mono text-[0.6875rem]">
+              versione {initial.formatVersion}
+            </span>
+            <span className="text-ink-faint">· guarda →</span>
+          </Link>
         </Panel>
 
         <Panel title="Consumo">

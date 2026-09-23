@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import {
   getParticipants,
   getEpisode,
+  getFormat,
   getTurns,
   nextSpeaker,
 } from "@/lib/db/episodes";
@@ -25,6 +26,9 @@ export default async function ConversationPage({
     guests: listGuests(),
     participants: getParticipants(id),
     next: nextSpeaker(id),
+    // Quale versione delle regole ha condotto questa conversazione. È fissata
+    // alla creazione e non cambia più.
+    formatVersion: getFormat(episode.formatId).version,
   } as ConversationData;
 
   return <Conversation initial={initial} />;
