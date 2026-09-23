@@ -294,7 +294,11 @@ Regole che ne discendono, tutte già applicate:
 
 L'applicazione è scura sempre: non è una preferenza di sistema da assecondare, è il posto in cui si sta seduti a parlare. Il serif è riservato al parlato, sans e mono a tutto il resto — la tipografia dice chi sta parlando prima che si legga una parola. I colori degli ospiti arrivano dal database e vengono schiariti in CSS per reggere il fondo scuro.
 
-**Conversazione** — quella in corso. Colonna centrale tarata sulla lettura (~65 battute per riga) con i turni in markdown + KaTeX, una barra di colore per ospite a sinistra di ogni intervento, comandi in basso e casella di chi modera sempre attiva. Sotto ogni turno, `rigenera` e `riavvolgi`. Laterale: chi è al tavolo con l'indicatore di chi sta parlando, la fase come segmentato a tre stati, contatore token con la quota letta dalla cache.
+**Conversazione** — quella in corso. Colonna centrale tarata sulla lettura (~65 battute per riga) con i turni in markdown + KaTeX, una barra di colore per ospite a sinistra di ogni intervento, comandi in basso e casella di chi modera sempre attiva. Laterale: chi è al tavolo con l'indicatore di chi sta parlando, la versione delle regole, la fase come segmentato a tre stati, contatore token con la quota letta dalla cache.
+
+Token, latenza, `riavvolgi` e `rigenera` stanno in testa a ogni turno e sono **sempre visibili**, non solo al passaggio del mouse: un comando che si scopre per caso non si scopre. Vivono nel grado di grigio più tenue e si accendono al contatto.
+
+Accanto a ogni ospite compare il modello, e viene letto da `turns.model` — quello che ha **risposto in questa conversazione**, non quello configurato adesso. La differenza non è teorica: la configurazione degli ospiti è globale e cambia nel tempo, quindi su una conversazione di due mesi fa il modello corrente attribuirebbe le risposte a chi non le ha scritte. Finché un ospite non ha parlato si ripiega sul configurato, marcato con `→` perché lì è una previsione e non un fatto.
 
 **Ospiti** — tre schede fisse, una per famiglia. Modello scelto da un menu popolato leggendo l'API, chiave come nome della env var, persona, parametri. I controlli mostrati dipendono dalle capability di *quel* modello (§2bis): su Claude Opus 5 compare `effort` e la temperatura non esiste. Pulsante "prova" che manda un ping e conferma che la configurazione risponde.
 
@@ -306,7 +310,11 @@ Nota: il nome dello spazio e quello di chi modera sono impostazioni globali, non
 
 **Nuova conversazione** — tema e brief, e chi siede al tavolo: le schede si numerano nell'ordine in cui le tocchi, perché l'ordine di selezione *è* l'ordine del giro.
 
-**Archivio** — lista con titolo, data, chi c'era, tema. Ricerca full-text nel corpo. Export Markdown (con front-matter) e JSON.
+**Archivio** — lista con titolo, data, chi c'era, tema e versione delle regole. Ricerca full-text nel corpo. Export Markdown (con front-matter) e JSON.
+
+Ogni scheda ha un menu con tre azioni. **Rinomina** tocca solo `episodes.title`, cioè l'etichetta in archivio: `topic` resta quello che leggono gli ospiti, perché cambiarlo riscriverebbe il tema di una conversazione già avvenuta. **Elimina** cancella davvero — è l'unica operazione dell'applicazione che lo fa, a differenza di rigenera e riavvolgi che nascondono — e i turni se ne vanno in cascata.
+
+**Duplica** riapre le stesse premesse: tema, brief, chi era al tavolo con i suoi ruoli, e il solo intervento di apertura. Nessun turno degli ospiti. Serve a rifare una conversazione con i modelli usciti nel frattempo, e funziona senza ulteriore lavoro proprio perché i modelli sono configurazione globale: la copia prende da sé quelli correnti. Le regole invece si ereditano dall'originale, così l'unica variabile che cambia sono i modelli; quando la versione corrente è diversa da quella dell'originale la scelta viene chiesta, e solo allora — se coincidono, chiederlo sarebbe rumore.
 
 ---
 
@@ -322,7 +330,8 @@ src/
     config/page.tsx                   # regole e impostazioni
     api/
       episodes/route.ts               # elenco, creazione
-      episodes/[id]/route.ts          # stato, fase, intervento, riavvolgimento
+      episodes/[id]/route.ts          # stato, fase, intervento, riavvolgimento, eliminazione
+      episodes/[id]/duplicate/route.ts
       episodes/[id]/turn/route.ts     # genera il prossimo turno, streaming SSE
       format/route.ts                 # versione corrente, crea versioni, adotta
       format/preview/route.ts         # il prompt composto, su un esempio
@@ -348,6 +357,6 @@ I comandi non hanno una rotta propria: passano dal `PATCH` su `episodes/[id]`, p
 - **v0.1** — ✅ Fatto. Ospiti, partecipanti, brief, giro round-robin, streaming, host che si inserisce, markdown + LaTeX, ruoli dialettici, contatore token, persistenza.
   Non ancora coperto in v0.1: il contatore mostra i token ma non il costo in valuta (manca una tabella prezzi affidabile per tutti e tre i provider), e il pulsante «Ferma ora» è implementato ma non ancora provato sul campo.
 - **v0.2** — Interruzione, domanda diretta, auricolare privato, rigenera con storico, fase di chiusura.
-  Fatto finora: riavvolgimento (§3), con il ricalcolo della fase che chiudeva un difetto silenzioso.
+  Fatto finora: riavvolgimento (§3), con il ricalcolo della fase che chiudeva un difetto silenzioso; regole versionate e agganciate alla conversazione (§1, §5); gestione dell'archivio — rinomina, duplica, elimina (§5).
 - **v0.3** — Archivio con ricerca full-text, export, titolo e tag automatici.
 - **v0.4** — Format versionati a confronto, doppia presa, partecipanti variabili, riassunto progressivo del contesto.

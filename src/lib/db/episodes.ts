@@ -212,10 +212,12 @@ export function createEpisode(input: {
   hostName?: string;
   participants: { guestId: string; role?: string | null }[];
   opening: string;
+  /** Solo per la duplicazione: riusa la versione delle regole dell'originale. */
+  formatId?: string;
 }): Episode {
   const db = getDb();
   const id = nanoid(12);
-  const formatId = currentFormatId();
+  const formatId = input.formatId ?? currentFormatId();
 
   db.transaction(() => {
     db.prepare(
@@ -250,6 +252,57 @@ export function createEpisode(input: {
   appendPhaseDirective(id, "apertura");
 
   return getEpisode(id)!;
+}
+
+/**
+ * Ricomincia una conversazione dalle stesse premesse: tema, brief, chi siede
+ * al tavolo con i suoi ruoli, e l'intervento che l'aveva aperta. Nient'altro —
+ * la copia parte vuota, non è un fork a metà.
+ *
+ * `formatId` decide con quali regole: quelle dell'originale (esperimento
+ * pulito, cambiano solo i modelli, che sono globali e quindi già i più
+ * recenti) oppure quelle correnti. La scelta ha senso solo quando le due
+ * versioni differiscono, ed è chi modera a farla.
+ */
+export function duplicateEpisode(
+  sourceId: string,
+  options: { formatId?: string } = {},
+):
+  | { ok: true; episode: Episode }
+  | { ok: false; reason: "missing" | "no-opening" } {
+  const source = getEpisode(sourceId);
+  if (!source) return { ok: false, reason: "missing" };
+
+  // L'apertura si cerca fra i turni visibili: se è stata riavvolta via, non
+  // c'è niente da copiare e dirlo è meglio che inventare un turno vuoto.
+  const opening = getTurns(sourceId).find((t) => t.authorType === "host");
+  if (!opening?.content.trim()) return { ok: false, reason: "no-opening" };
+
+  const episode = createEpisode({
+    topic: source.topic,
+    brief: source.brief,
+    hostName: source.hostName,
+    participants: getParticipants(sourceId).map((p) => ({
+      guestId: p.guestId,
+      role: p.role,
+    })),
+    opening: opening.content,
+    formatId: options.formatId ?? source.formatId,
+  });
+
+  return { ok: true, episode };
+}
+
+/**
+ * Cancella davvero, a differenza di rigenera e riavvolgi. I turni e il tavolo
+ * se ne vanno in cascata (`ON DELETE CASCADE`), e i trigger ripuliscono
+ * l'indice full-text.
+ */
+export function deleteEpisode(id: string): boolean {
+  const { changes } = getDb()
+    .prepare("DELETE FROM episodes WHERE id = ?")
+    .run(id);
+  return changes > 0;
 }
 
 export function getEpisode(id: string): Episode | null {

@@ -1,6 +1,7 @@
 import {
   appendPhaseDirective,
   appendTurn,
+  deleteEpisode,
   getParticipants,
   getEpisode,
   getTurn,
@@ -32,6 +33,17 @@ export async function GET(_request: Request, { params }: Ctx) {
     guests: listGuests(),
     next: nextSpeaker(id),
   });
+}
+
+export async function DELETE(_request: Request, { params }: Ctx) {
+  const { id } = await params;
+  if (!deleteEpisode(id)) {
+    return Response.json(
+      { error: "Conversazione inesistente" },
+      { status: 404 },
+    );
+  }
+  return Response.json({ deleted: true });
 }
 
 export async function PATCH(request: Request, { params }: Ctx) {

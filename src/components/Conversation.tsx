@@ -12,6 +12,8 @@ export interface Guest {
   name: string;
   emoji: string;
   color: string;
+  /** Il modello configurato adesso: vale solo come previsione (vedi modelOf). */
+  model: string;
 }
 interface Turn {
   id: string;
@@ -92,6 +94,32 @@ export function Conversation({ initial }: { initial: ConversationData }) {
   const guestById = useCallback(
     (gid: string | null) => guests.find((g) => g.id === gid),
     [guests],
+  );
+
+  /**
+   * Il modello che ha risposto **in questa conversazione**, non quello
+   * configurato adesso. La configurazione degli ospiti è globale e cambia nel
+   * tempo: mostrare quella su una conversazione di due mesi fa attribuirebbe
+   * le risposte al modello sbagliato. `turns.model` è l'unico registro onesto.
+   *
+   * Finché un ospite non ha parlato si ripiega sul configurato, che lì è la
+   * previsione corretta di chi risponderà. I turni in errore o interrotti non
+   * hanno modello: si prende l'ultimo che ce l'ha.
+   */
+  const modelOf = useCallback(
+    (guestId: string): { name: string | null; historical: boolean } => {
+      for (let i = turns.length - 1; i >= 0; i--) {
+        const t = turns[i];
+        if (t.authorType === "guest" && t.guestId === guestId && t.model) {
+          return { name: t.model, historical: true };
+        }
+      }
+      return {
+        name: guests.find((g) => g.id === guestId)?.model || null,
+        historical: false,
+      };
+    },
+    [turns, guests],
   );
 
   const load = useCallback(async () => {
@@ -357,7 +385,11 @@ export function Conversation({ initial }: { initial: ConversationData }) {
                         interrotto
                       </span>
                     )}
-                    <span className="text-ink-faint ml-auto flex items-center gap-2.5 font-mono text-[0.6875rem] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    {/* Sempre visibili, non solo al passaggio del mouse: un
+                        comando che si scopre per caso non si scopre. Stanno
+                        nel grado di grigio più tenue e si accendono al
+                        contatto, così ci sono senza pesare su ogni turno. */}
+                    <span className="text-ink-faint ml-auto flex items-center gap-2.5 font-mono text-[0.6875rem]">
                       {turn.outputTokens !== null && (
                         <span>
                           {turn.outputTokens} tok · {turn.latencyMs} ms
@@ -368,7 +400,7 @@ export function Conversation({ initial }: { initial: ConversationData }) {
                       onClick={() => askRewind(turn)}
                       disabled={!!live}
                       title="Riavvolge qui: questo turno e tutti i successivi escono di trascrizione"
-                      className="text-ink-faint hover:text-ink font-mono text-[0.6875rem] opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 disabled:opacity-30"
+                      className="text-ink-faint hover:text-ink font-mono text-[0.6875rem] transition-colors disabled:opacity-30"
                     >
                       ↩ riavvolgi
                     </button>
@@ -376,11 +408,10 @@ export function Conversation({ initial }: { initial: ConversationData }) {
                       <button
                         onClick={() => regenerate(turn.id)}
                         disabled={!!live}
-                        // Sempre visibile su un turno fallito: lì serve davvero.
-                        className={`hover:text-ink font-mono text-[0.6875rem] transition-opacity disabled:opacity-30 ${
-                          turn.status === "error"
-                            ? "text-live"
-                            : "text-ink-faint opacity-0 group-hover:opacity-100 focus:opacity-100"
+                        // Sul turno fallito è rosso: lì non è un'opzione fra
+                        // le altre, è la cosa da fare.
+                        className={`hover:text-ink font-mono text-[0.6875rem] transition-colors disabled:opacity-30 ${
+                          turn.status === "error" ? "text-live" : "text-ink-faint"
                         }`}
                       >
                         ↻ rigenera
@@ -609,6 +640,31 @@ export function Conversation({ initial }: { initial: ConversationData }) {
                         </span>
                       ) : null}
                     </div>
+                    {(() => {
+                      const m = modelOf(c.guestId);
+                      if (!m.name) {
+                        return (
+                          <p className="text-brass mt-0.5 font-mono text-[0.625rem]">
+                            nessun modello
+                          </p>
+                        );
+                      }
+                      return (
+                        <p
+                          title={
+                            m.historical
+                              ? "Il modello che ha risposto in questa conversazione"
+                              : "Non ha ancora parlato: è il modello configurato adesso"
+                          }
+                          className={`mt-0.5 truncate font-mono text-[0.625rem] ${
+                            m.historical ? "text-ink-dim" : "text-ink-faint"
+                          }`}
+                        >
+                          {m.historical ? "" : "→ "}
+                          {m.name}
+                        </p>
+                      );
+                    })()}
                     {c.role && (
                       <p className="text-ink-faint mt-0.5 text-[0.6875rem] leading-snug">
                         {c.role}
@@ -617,7 +673,7 @@ export function Conversation({ initial }: { initial: ConversationData }) {
                     <button
                       onClick={() => giveFloor(c.guestId)}
                       disabled={!!live}
-                      className="text-ink-faint hover:text-ink mt-1 font-mono text-[0.625rem] opacity-0 transition group-hover:opacity-100 focus:opacity-100 disabled:opacity-30"
+                      className="text-ink-faint hover:text-ink mt-1 font-mono text-[0.625rem] transition-colors disabled:opacity-30"
                     >
                       dai la parola →
                     </button>

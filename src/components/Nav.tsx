@@ -17,11 +17,16 @@ export function Nav() {
 
   return (
     <header
-      className={`border-line bg-page/85 sticky top-0 z-30 border-b backdrop-blur-md transition-opacity ${
-        inConversation ? "opacity-60 hover:opacity-100" : ""
-      }`}
+      className="border-line bg-page/95 sticky top-0 z-30 border-b backdrop-blur-md"
     >
-      <nav className="mx-auto flex max-w-6xl items-center gap-1 px-6 py-2.5">
+      {/* L'attenuazione sta sul contenuto, non sull'intestazione: messa sul
+          contenitore rendeva semitrasparente anche lo sfondo, e scorrendo la
+          trascrizione ci passava attraverso. */}
+      <nav
+        className={`mx-auto flex max-w-6xl items-center gap-1 px-6 py-2.5 transition-opacity ${
+          inConversation ? "opacity-60 hover:opacity-100" : ""
+        }`}
+      >
         <Link
           href="/"
           className="mr-5 flex items-center gap-2.5"
