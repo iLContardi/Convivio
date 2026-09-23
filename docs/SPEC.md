@@ -17,7 +17,7 @@ programma non presuppone un genere — chi ne vuole uno se lo scrive nelle regol
 | Ospiti | **Uno per famiglia** — Claude, GPT, Gemini. La versione del modello è configurazione, non identità |
 | Model ID | Letti a runtime dalle API di ciascun provider, mai scritti a mano nel codice |
 | In v1 | LaTeX, ruoli dialettici, contatore costi |
-| In v0.2 | Auricolare (regia privata), doppia presa, cast dinamico |
+| In v0.2 | Auricolare (indicazioni private a un solo ospite), doppia presa, partecipanti variabili |
 
 Le API key restano **sempre** server-side: il browser non le vede mai.
 
@@ -28,7 +28,7 @@ Le API key restano **sempre** server-side: il browser non le vede mai.
 Schema SQLite. `snake_case`, id testuali (nanoid) per comodità di export.
 
 ```sql
--- Ospiti: uno per famiglia, configurazione stabile, riusabile fra puntate
+-- Ospiti: uno per famiglia, configurazione stabile, riusabile fra conversazioni
 CREATE TABLE guests (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,          -- nome pubblico stabile: "Claude", "GPT", "Gemini"
@@ -45,23 +45,24 @@ CREATE TABLE guests (
   created_at    TEXT NOT NULL
 );
 
--- Format: le regole del programma, versionate
+-- Le regole della conversazione, versionate
 CREATE TABLE formats (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
   body        TEXT NOT NULL,            -- il prompt con i placeholder
   version     INTEGER NOT NULL DEFAULT 1,
+  phases      TEXT NOT NULL DEFAULT '{}',  -- JSON: il testo editabile delle tre direttive
   created_at  TEXT NOT NULL
 );
 
--- Puntate
+-- Conversazioni
 CREATE TABLE episodes (
   id          TEXT PRIMARY KEY,
   title       TEXT,                     -- generato a fine registrazione
   topic       TEXT NOT NULL,
   brief       TEXT,                     -- le riflessioni di base portate dall'host
   format_id   TEXT NOT NULL REFERENCES formats(id),
-  host_name   TEXT NOT NULL DEFAULT 'Conduttore',
+  host_name   TEXT NOT NULL DEFAULT 'Moderatore',
   phase       TEXT NOT NULL DEFAULT 'apertura',  -- apertura | dibattito | chiusura
   status      TEXT NOT NULL DEFAULT 'draft',     -- draft | live | paused | ended
   notes       TEXT,                     -- appunti privati dell'host, mai inviati
@@ -69,13 +70,13 @@ CREATE TABLE episodes (
   ended_at    TEXT
 );
 
--- Cast della singola puntata, con ordine e ruolo dialettico
+-- Chi siede al tavolo nella singola conversazione, con ordine e ruolo dialettico
 CREATE TABLE episode_guests (
   episode_id     TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
   guest_id       TEXT NOT NULL REFERENCES guests(id),
   position       INTEGER NOT NULL,      -- ordine nel giro
   role           TEXT,                  -- ruolo dialettico, entra nel prompt
-  joined_at_turn INTEGER DEFAULT 0,     -- per il cast dinamico (v0.4)
+  joined_at_turn INTEGER DEFAULT 0,     -- per i partecipanti variabili (v0.4)
   left_at_turn   INTEGER,
   PRIMARY KEY (episode_id, guest_id)
 );
@@ -92,9 +93,13 @@ CREATE TABLE turns (
   model          TEXT,                  -- modello effettivo che ha risposto
   input_tokens   INTEGER,
   output_tokens  INTEGER,
+  cached_tokens  INTEGER,               -- letti dalla cache: si pagano un decimo
+  cache_write_tokens INTEGER,
   cost_micros    INTEGER,               -- millesimi di centesimo, interi
   latency_ms     INTEGER,
   superseded_by  TEXT REFERENCES turns(id),  -- versioni scartate dopo un rigenera
+  discarded_at   TEXT,                  -- riavvolto: fuori trascrizione, non cancellato
+  phase          TEXT,                  -- solo sui turni di sistema: la fase che apre
   created_at     TEXT NOT NULL
 );
 
@@ -103,10 +108,12 @@ CREATE VIRTUAL TABLE turns_fts USING fts5(content, content='turns', content_rowi
 
 Note di progetto:
 
-- `superseded_by` invece di cancellare: un rigenera non distrugge la presa precedente. Costa una colonna, salva le puntate.
+- `superseded_by` invece di cancellare: un rigenera non distrugge la presa precedente. Costa una colonna, salva le conversazioni.
+- `discarded_at` separata da `superseded_by`, e non riusata: la seconda punta al turno *sostituto*, e un rewind un sostituto non ce l'ha. Auto-referenziare il turno confonderebbe il percorso del rigenera.
+- `turns.phase` esiste per il rewind: il testo di una direttiva è editabile, quindi non è un identificatore. Senza questa colonna, dopo aver riavvolto non si può sapere a che fase è tornata la conversazione.
 - `cost_micros` intero: mai float sui soldi.
-- `joined_at_turn` / `left_at_turn` esistono già in v1 anche se il cast dinamico arriva dopo — evitano una migrazione.
-- `provider UNIQUE`: l'ospite *è* la famiglia. Cambiare versione del modello non crea un nuovo ospite, e il nome in trascrizione resta stabile fra le puntate.
+- `joined_at_turn` / `left_at_turn` esistono già in v1 anche se i partecipanti variabili arrivano dopo — evitano una migrazione.
+- `provider UNIQUE`: l'ospite *è* la famiglia. Cambiare versione del modello non crea un nuovo ospite, e il nome in trascrizione resta stabile fra le conversazioni.
 - `params` come JSON opaco invece di colonne fisse: i parametri di generazione non sono più gli stessi fra provider (vedi §2bis), e ogni release ne cambia qualcuno.
 
 ---
@@ -152,15 +159,15 @@ persone che pensano ad alta voce — dipende da dove la porta chi modera.
 - Si parla a turno. Quando tocca a te scrivi UN SOLO intervento: non simulare
   gli altri partecipanti, non scrivere il loro nome come intestazione, non
   anticipare il turno successivo.
-- Il conduttore può inserirsi in qualsiasi momento per rivolgersi a te,
-  cambiare direzione o chiudere un filone. Le sue indicazioni hanno la
-  precedenza su tutto il resto.
+- Chi modera può inserirsi in qualsiasi momento per rivolgersi a te, cambiare
+  direzione o chiudere un filone. Le sue indicazioni hanno la precedenza su
+  tutto il resto.
 - Ogni intervento che leggi è preceduto dal nome di chi parla. Il tuo nome
-  pubblico è {{guest_name}}: non scriverlo tu, lo aggiunge il programma.
+  pubblico è {{guest_name}}: non scriverlo tu, lo aggiunge l'applicazione.
 
 ## Come si parla
 - Lunghezza indicativa: {{target_words}} parole. Meglio sotto che sopra.
-- Non riassumere l'intervento di chi ti precede: chi ascolta l'ha appena letto.
+- Non riassumere l'intervento di chi ti precede: è appena stato letto.
 - Niente formule di cortesia verso gli altri partecipanti ("ottima
   osservazione", "punto interessante"). Entra direttamente nel merito.
 - Se sei d'accordo non limitarti a confermare: aggiungi un elemento nuovo, un
@@ -184,13 +191,13 @@ Campo libero per ospite. Chi è, che taglio ha, cosa lo interessa. **Non** conti
 ### Strato 3 — Contesto dinamico (generato)
 
 ```
-## Questa puntata
+## Questa conversazione
 Tema: {{topic}}
 
 {{brief}}
 
-## Chi c'è in studio
-Conduttore: {{host_name}}
+## Chi c'è al tavolo
+Modera: {{host_name}}
 {{#each altri_ospiti}}
 - {{name}} — {{persona_oneline}}
 {{/each}}
@@ -199,14 +206,14 @@ Conduttore: {{host_name}}
 {{role}}
 ```
 
-**L'istruzione di fase non sta nel prompt di sistema.** Viaggia come *turno di regia* in coda alla conversazione, etichettato `**Regia:**`, e viene persistita in trascrizione come turno vero (`author_type = 'system'`).
+**L'istruzione di fase non sta nel prompt di sistema.** Viaggia come *turno di moderazione* in coda alla conversazione, etichettato `**Moderazione:**`, e viene persistita in trascrizione come turno vero (`author_type = 'system'`, con la fase in `turns.phase`).
 
 Due ragioni, entrambe verificate sul campo:
 
-- **Costo.** Su tutti e tre i provider la cache è un confronto di prefisso: modificare l'ultima riga del prompt di sistema invalida il prompt di sistema *e tutta la trascrizione accumulata*. Un cambio di fase costava una rilettura integrale della puntata a prezzo pieno. Come turno in coda, la trascrizione resta append-only e la cache regge — misurato: 1.120 token riletti nel turno immediatamente successivo a un cambio di fase.
-- **Archivio.** Una direttiva di regia visibile permette di ricostruire com'è stata condotta la puntata, non solo cosa è stato detto.
+- **Costo.** Su tutti e tre i provider la cache è un confronto di prefisso: modificare l'ultima riga del prompt di sistema invalida il prompt di sistema *e tutta la trascrizione accumulata*. Un cambio di fase costava una rilettura integrale della conversazione a prezzo pieno. Come turno in coda, la trascrizione resta append-only e la cache regge — misurato: 1.120 token riletti nel turno immediatamente successivo a un cambio di fase.
+- **Archivio.** Una direttiva visibile permette di ricostruire com'è stata condotta la conversazione, non solo cosa è stato detto.
 
-Un turno di regia viene registrato alla creazione della puntata (fase `apertura`) e a ogni cambio di fase effettivo — riselezionare la fase corrente non produce righe in più.
+Un turno di moderazione viene registrato alla creazione della conversazione (fase `apertura`) e a ogni cambio di fase effettivo — riselezionare la fase corrente non produce righe in più.
 
 | Fase | Testo della direttiva (editabile in Configurazione) |
 |---|---|
@@ -214,13 +221,13 @@ Un turno di regia viene registrato alla creazione della puntata (fase `apertura`
 | `dibattito` | Siamo nel vivo: incalza, distingui, porta obiezioni concrete. |
 | `chiusura` | Giro di chiusura: una sola sintesi, cosa resta e cosa è rimasto aperto. Non introdurre argomenti nuovi. |
 
-Nota sul canale: la regia è proiettata come messaggio `user` etichettato, non come ruolo `system` a metà conversazione. Quest'ultimo esisterebbe su Claude ed è non falsificabile, ma ha vincoli di posizione (deve seguire un turno utente) che qui non sono garantiti, perché una direttiva può arrivare subito dopo l'intervento di un ospite.
+Nota sul canale: l'indicazione è proiettata come messaggio `user` etichettato, non come ruolo `system` a metà conversazione. Quest'ultimo esisterebbe su Claude ed è non falsificabile, ma ha vincoli di posizione (deve seguire un turno utente) che qui non sono garantiti, perché una direttiva può arrivare subito dopo l'intervento di un ospite.
 
 ---
 
 ## 3. Motore di turnazione
 
-Macchina a stati della puntata: `draft → live ⇄ paused → ended`.
+Macchina a stati della conversazione: `draft → live ⇄ paused → ended`.
 
 Ciclo in `live`:
 
@@ -229,9 +236,23 @@ Ciclo in `live`:
 3. Se c'è una **domanda diretta** pendente → quell'ospite ha la precedenza, poi il giro riprende da dove era rimasto (l'indice del giro non si perde).
 4. Dopo `max_consecutive_auto` turni senza input dell'host (default 5) → pausa automatica.
 
-Comandi di regia: `Avvia` · `Pausa dopo questo turno` · `Salta il prossimo` · `Ferma ora` (segna il turno `interrupted`, il testo parziale resta) · `Rigenera ultimo` · `Domanda diretta a…` · `Chiudi con le conclusioni` (passa a fase `chiusura`, un giro completo, poi `ended`).
+Comandi: `Avvia` · `Pausa dopo questo turno` · `Salta il prossimo` · `Ferma ora` (segna il turno `interrupted`, il testo parziale resta) · `Rigenera` · `Riavvolgi` · `Domanda diretta a…` · `Chiudi con le conclusioni` (passa a fase `chiusura`, un giro completo, poi `ended`).
 
 Errori: retry con backoff esponenziale (3 tentativi), poi turno `error` con contenuto `[{{name}} non ha potuto rispondere: {{motivo}}]` e il giro **prosegue**.
+
+### Riavvolgimento
+
+`Riavvolgi` su un turno porta fuori dalla trascrizione quel turno e tutti i successivi: marca `discarded_at`, non cancella. Su un turno di chi modera il testo torna nell'area di scrittura, così l'uso tipico — ho scritto male, ci ripenso, riscrivo — è un gesto solo.
+
+Tre proprietà ne discendono, e due sono gratis per come è fatto il resto:
+
+- **Il turno di parola torna indietro da sé.** `nextSpeaker` *deriva* la posizione nel giro dai turni visibili invece di memorizzarla, quindi riavvolgere la trascrizione riavvolge anche a chi tocca. Nessuno stato da risincronizzare.
+- **Gli ordinali non si riusano.** L'inserimento prende `MAX(ordinal) + 1` contando anche i turni nascosti: un turno nuovo dopo un rewind non può collidere con uno riavvolto, e la cronologia resta non ambigua.
+- **La fase va rimessa a mano, ed è l'unico punto insidioso.** Vive in `episodes.phase` ma nasce da un'indicazione in trascrizione. Riavvolgendo oltre un cambio di fase la colonna resterebbe avanti e, siccome una nuova direttiva viene appesa solo quando la fase *cambia*, riselezionare quella giusta non produrrebbe nulla: la conversazione proseguirebbe senza riceverla mai. Nessun errore, solo ospiti convinti di essere in una fase in cui non sono. Il rewind ricalcola la fase dall'ultima indicazione superstite, `apertura` se non ne resta nessuna.
+
+Sulla cache il rewind è l'operazione economica: taglia una coda, e i prefissi sono confronti dall'inizio, quindi tutto ciò che sta prima del punto di rewind resta valido.
+
+Limite noto: l'indice full-text continua a contenere i turni riavvolti. Non si vede finché l'archivio non avrà la ricerca (v0.3), poi servirà un filtro.
 
 ---
 
@@ -243,11 +264,12 @@ Per ogni ospite, la stessa trascrizione va proiettata su `system` + `user`/`assi
 - I turni **dell'ospite di turno** → `assistant`, contenuto nudo.
 - Tutti gli altri turni (host e altri ospiti) → `user`, prefissati `**{{nome}}:**`.
 - I `user` consecutivi vanno **fusi** in un unico messaggio separato da riga vuota: diversi provider rifiutano o gestiscono male ruoli ripetuti.
-- Il turno `interrupted` resta in trascrizione con il suo testo parziale e il marcatore `[interrotto dal conduttore]`.
+- Il turno `interrupted` resta in trascrizione con il suo testo parziale e il marcatore `[interrotto da chi modera]`.
+- I turni con `superseded_by` o `discarded_at` valorizzati non vengono proiettati: restano nel database, ma per gli ospiti non esistono.
 
 ### Caching
 
-Il costo cresce quadraticamente perché ogni turno rilegge tutta la puntata. Due punti di cache lo contengono, ed è la trascrizione — non il prompt di sistema — a dare il guadagno maggiore, perché è la parte che cresce.
+Il costo cresce quadraticamente perché ogni turno rilegge tutta la conversazione. Due punti di cache lo contengono, ed è la trascrizione — non il prompt di sistema — a dare il guadagno maggiore, perché è la parte che cresce.
 
 | | Claude | GPT | Gemini |
 |---|---|---|---|
@@ -258,22 +280,26 @@ Il costo cresce quadraticamente perché ogni turno rilegge tutta la puntata. Due
 
 Regole che ne discendono, tutte già applicate:
 
-- Il blocco di sistema è **congelato** per tutta la puntata: niente date, niente id di sessione, niente istruzione di fase.
+- Il blocco di sistema è **congelato** per tutta la conversazione: niente date, niente id di sessione, niente istruzione di fase.
 - Il secondo breakpoint sta sull'**ultimo messaggio**, così la cache cresce di turno in turno.
-- `effort` e i parametri di generazione non vanno variati a metà puntata: su Claude invalidano la cache dei messaggi.
+- `effort` e i parametri di generazione non vanno variati a metà conversazione: su Claude invalidano la cache dei messaggi.
 - Token letti e scritti sono registrati per turno. Su Gemini, dove il caching è implicito e non dichiarabile, **misurare è l'unico controllo disponibile**.
 
 ---
 
 ## 5. Schermate
 
-**Studio** — la puntata in corso. Colonna centrale con i turni (markdown + KaTeX + syntax highlighting, colore e emoji per ospite), barra di regia in basso, casella dell'host sempre attiva. Laterale: cast con indicatore di chi sta parlando, fase corrente, contatore token/costo, note private.
+L'applicazione è scura sempre: non è una preferenza di sistema da assecondare, è il posto in cui si sta seduti a parlare. Il serif è riservato al parlato, sans e mono a tutto il resto — la tipografia dice chi sta parlando prima che si legga una parola. I colori degli ospiti arrivano dal database e vengono schiariti in CSS per reggere il fondo scuro.
+
+**Conversazione** — quella in corso. Colonna centrale tarata sulla lettura (~65 battute per riga) con i turni in markdown + KaTeX, una barra di colore per ospite a sinistra di ogni intervento, comandi in basso e casella di chi modera sempre attiva. Sotto ogni turno, `rigenera` e `riavvolgi`. Laterale: chi è al tavolo con l'indicatore di chi sta parlando, la fase come segmentato a tre stati, contatore token con la quota letta dalla cache.
 
 **Ospiti** — tre schede fisse, una per famiglia. Modello scelto da un menu popolato leggendo l'API, chiave come nome della env var, persona, parametri. I controlli mostrati dipendono dalle capability di *quel* modello (§2bis): su Claude Opus 5 compare `effort` e la temperatura non esiste. Pulsante "prova" che manda un ping e conferma che la configurazione risponde.
 
-**Format** — editor del prompt condiviso, con anteprima del prompt composto per un ospite scelto. Versionato.
+**Regole** — editor del prompt condiviso con i `{{segnaposto}}` evidenziati mentre si scrive, i testi delle tre direttive di fase, e l'anteprima del prompt composto per un ospite scelto. Versionato.
 
-**Archivio** — lista con titolo, data, cast, tema. Ricerca full-text nel corpo. Export Markdown (con front-matter) e JSON.
+**Nuova conversazione** — tema e brief, e chi siede al tavolo: le schede si numerano nell'ordine in cui le tocchi, perché l'ordine di selezione *è* l'ordine del giro.
+
+**Archivio** — lista con titolo, data, chi c'era, tema. Ricerca full-text nel corpo. Export Markdown (con front-matter) e JSON.
 
 ---
 
@@ -282,29 +308,39 @@ Regole che ne discendono, tutte già applicate:
 ```
 src/
   app/
-    (studio)/episodes/[id]/page.tsx
+    page.tsx                          # archivio
+    episodes/new/page.tsx
+    episodes/[id]/page.tsx            # la conversazione
     guests/page.tsx
-    formats/page.tsx
-    archive/page.tsx
+    config/page.tsx                   # regole e impostazioni
     api/
+      episodes/route.ts               # elenco, creazione
+      episodes/[id]/route.ts          # stato, fase, intervento, riavvolgimento
       episodes/[id]/turn/route.ts     # genera il prossimo turno, streaming SSE
-      episodes/[id]/control/route.ts  # comandi di regia
+      format/route.ts
+      format/preview/route.ts         # il prompt composto, su un esempio
       guests/route.ts
+      guests/test/route.ts            # il ping di "prova"
+      models/route.ts                 # elenco letto dalle API dei provider
+      settings/route.ts
   lib/
-    providers/      # adapter, tabella capability, calcolo costi
-    engine/         # macchina a stati, coda host, proiezione contesto
-    prompt/         # composizione dei tre strati
+    providers/      # tre adapter, tabella capability
+    engine/         # generazione del turno, retry, errori
+    prompt/         # composizione dei tre strati e proiezione
     db/             # schema, migrazioni, query
-  components/
-    studio/  guests/  markdown/
+  components/       # Conversation, GuestsEditor, FormatEditor,
+                    # NewEpisodeForm, Markdown, Nav
 ```
+
+I comandi non hanno una rotta propria: passano dal `PATCH` su `episodes/[id]`, perché sono tutti modifiche allo stato della conversazione.
 
 ---
 
 ## 7. Roadmap
 
-- **v0.1** — ✅ Fatto. Ospiti, cast, brief, giro round-robin, streaming, host che si inserisce, markdown + LaTeX, ruoli dialettici, contatore token, persistenza.
+- **v0.1** — ✅ Fatto. Ospiti, partecipanti, brief, giro round-robin, streaming, host che si inserisce, markdown + LaTeX, ruoli dialettici, contatore token, persistenza.
   Non ancora coperto in v0.1: il contatore mostra i token ma non il costo in valuta (manca una tabella prezzi affidabile per tutti e tre i provider), e il pulsante «Ferma ora» è implementato ma non ancora provato sul campo.
 - **v0.2** — Interruzione, domanda diretta, auricolare privato, rigenera con storico, fase di chiusura.
+  Fatto finora: riavvolgimento (§3), con il ricalcolo della fase che chiudeva un difetto silenzioso.
 - **v0.3** — Archivio con ricerca full-text, export, titolo e tag automatici.
-- **v0.4** — Format versionati a confronto, doppia presa, cast dinamico, riassunto progressivo del contesto.
+- **v0.4** — Format versionati a confronto, doppia presa, partecipanti variabili, riassunto progressivo del contesto.

@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS turns (
   cost_micros    INTEGER,
   latency_ms     INTEGER,
   superseded_by  TEXT REFERENCES turns(id),
+  discarded_at   TEXT,     -- riavvolto: fuori dalla trascrizione, non cancellato
+  phase          TEXT,     -- solo sui turni di sistema: la fase che l'indicazione apre
   created_at     TEXT NOT NULL
 );
 
